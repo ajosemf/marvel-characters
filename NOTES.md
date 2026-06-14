@@ -8,7 +8,7 @@ Data de publicação no YouTube: 29/08/2025
 
 O curso é uma playlist de 10 vídeos, com duração total de aproximadamente 3 horas.
 
-O curso se baseia no desenvolvimento de um modelo LightGBM para prever se um personagem da Marvel irá sobreviver ou não.
+O curso se baseia no desenvolvimento de um modelo usando `LightGBM` para prever se um personagem da Marvel irá sobreviver ou não. LightGBM é uma biblioteca de aprendizado de máquina baseada em decision trees (like XGBoost), desenvolvida pela Microsoft, e que é eficiente e escalável para grandes conjuntos de dados.
 
 ## Requisitos
 * [Instalação do databricks-cli](https://docs.databricks.com/aws/en/dev-tools/cli/install#curl-installation-for-linux-macos-and-windows)
@@ -48,6 +48,9 @@ Lecture 9: Intro to monitoring
 Lecture 10: Lakehouse monitoring
 
 # Setup do Projeto
+
+## Conta Databricks e Criação dos Catálogos e Schemas
+Criar uma conta no Databricks Free Edition. Após criar a conta, acessar o workspace do Databricks e criar os catálogos `mlops_dev`, `mlops_acc` e `mlops_prd`. Dentro de cada catálogo, criar o schema `marvel_characters`.
 
 ## Setup Inicial no VSCode
 No VSCode, abrir um terminal integrado na raiz do projeto.
@@ -102,6 +105,80 @@ logger.info(yaml.dump(config, default_flow_style=False))
 
 Todas as demais células do notebook poderão ser executadas da mesma forma. Como resultado final, espera-se que os tables `mlops_dev.marvel_characters.train_set` e `mlops_dev.marvel_characters.test_set` sejam criados no catálogo do Databricks.
 
+# MLflow
+Abordado no notebook `notebooks/lecture3.mlflow_experiment_tracking.py`.
+
+Antes de iniciar a execução do notebook, é necessário criar um arquivo `.env` na raiz do projeto, conforme abaixo. O valor de `[PROFILE]` deve ser o nome do profile que pode ser obtido no arquivo `.databrickscfg` criado em seu diretório home após o comando `databricks auth login`. Outra forma é acessando pelo VsCode, clicando no ícone do Databricks na barra lateral esquerda, em `Configuration > Auth Type` e clicando no ícone de engrenagem ao lado do profile selecionado `Edit Databricks profile`. O profile é um valor como `[dbc-...]`
+
+```
+PROFILE=[PROFILE]
+```
+
+O motivo deste arquivo `.env` é direcionar todo o tracking do MLflow para o Databricks, permitindo usar a interface no Databricks em `Experiments`. O direcionamento é executado na célula 3 do notebook, usando `mlflow.set_tracking_uri(f"databricks://{os.getenv('PROFILE')}")`.
+
+O notebook apresenta os principais recursos do MLflow, entre eles:
+* Configurar o experimento: `mlflow.set_experiment("experiment_name")`
+* Obter um experimento pelo id: `mlflow.get_experiment(experiment_id)`
+* Buscar experimentos por filter_string: `mlflow.search_experiments(filter_string="name = 'experiment_name'")`
+* Iniciar um run atribuindo metadados: `with mlflow.start_run(run_name="run_name", tags={"tag_key": "tag_value"}) as run:`
+* Registrar parâmetros, métricas, artefatos, textos, dicionários, imagens e figuras.
+* Registrar métricas por timestep: `mlflow.log_metric("metric_name", metric_value, step=step)`
+* Obter um run pelo id: `mlflow.get_run(run_id)`
+* Buscar runs por filter_string: `mlflow.search_runs(filter_string="tags.tag_key = 'tag_value'")`
+* Carregar artefatos: `mlflow.artifacts.load_image("artifact_path")`
+* Fazer o download de artefatos: `mlflow.artifacts.download_artifacts("artifact_path", dst_path="local_path")`
+* Executar runs aninhados (bom para hyperparameter tuning):
+
+```python
+# nested runs: useful for hyperparameter tuning
+with mlflow.start_run(run_name="marvel_top_level_run") as run:
+    for i in range(1,5):
+        with mlflow.start_run(run_name=f"marvel_subrun_{str(i)}", nested=True) as subrun:
+            mlflow.log_metrics({"m1": 5.1+i,
+                                "m2": 2*i,
+                                "m3": 3+1.5*i})
+```
+
+# Model Registry (Basic Model)
+Abordado no notebook `notebooks/lecture4.train_register_basic_model.py`.
+
+Um MLflow Model é um formato padrão para empacotar modelos de ML. O MLflow oferece flavors para diferentes frameworks de ML, como scikit-learn, TensorFlow, PyTorch, LightGBM, entre outros. Flavors garantem consistência para processos de save, load e inferência de modelos. Pyfuncs podem ser usadas, por meio da classe base PythonModel, para criar um modelo customizado, i.e., um modelo que não se encaixe em nenhum flavor pré-definido.
+
+Este notebook invoca a classe `BasicModel` implementada em `src/marvel_characters/models/basic_model. py`. Elementos relevantes desta classe:
+* A classe não representa uma arquitetura de aprendizado, mas sim um objeto que encapsula as etapas: `load_data, prepare_features, set_pipeline, train, log_model e register_model` (usando MLflow).
+* Em `prepare_features`, existem implementações separadas para `fit_transform` e `transform`, que são métodos para transformar uma variável categórica. O método `fit_transform` é usado para ajustar o encoder e transformar as colunas categóricas para valores inteiros, normalmente usando o conjunto de treinamento. O método `transform` é usado para transformar os dados de teste usando o encoder ajustado no conjunto de treinamento. Além de evitar data leakage, o método `transform` aplica o valor `-1` para categorias que não foram vistas durante o ajuste do encoder, o que é uma prática comum para lidar com categorias desconhecidas em dados de produção. A classe transforma para `valores inteiros em vez do clássico one-hot encoding` porque o LightGBM lida melhor com variáveis categóricas codificadas como inteiros.
+* Apesar do modelo ser o LightGBM, o notebook encapsula esse modelo em um `Scikit-learn Pipeline`. Isso permite que o log do modelo no MLflow seja feito usando o `flavor de Scikit-learn`, o que é vantajoso para fins de compatibilidade e portabilidade do modelo.
+* As métricas de avaliação do modelo são capturadas usando `mlflow.model.evaluate()`, método oferecido pelo MLflow para avaliar modelos usando diferentes métricas. O método `evaluate` é uma forma conveniente de calcular várias métricas de avaliação para um modelo, sem a necessidade de calcular manualmente cada métrica. Ele suporta uma variedade de métricas pré-definidas, como acurácia, precisão, recall, F1-score, AUC-ROC, entre outras. O atributo `"evaluators=['default']"` configura o método `evaluate` para usar um conjunto padrão de métricas de avaliação, que inclui as métricas mais comuns para classificação e regressão.
+
+O notebook invoca as etapas implementadas na classe `BasicModel` para treinar e registrar o modelo. Em seguida o notebook apresenta diversas formas de consultar e obter o modelo e todos os metadados associados por meio de: `experiment_name` e `run_id`. Não é possível consultar e obter o modelo por meio de tags.
+
+
+# Model Registry (Custom Model)
+Abordado no notebook `notebooks/lecture4.train_register_custom_model.py`.
+
+O notebook apresenta como registrar o `Custom Model`, com base no `Basic Model`, de forma que o modelo seja registrado com o pacote `whl`. Isso garante que o modelo irá funcionar corretamente por meio do `Model Serving`.
+
+Para tal, o notebook invoca a classe `MarvelModelWrapper`, que estende `mlflow.pyfunc.PythonModel`, e implementa os métodos `predict` e `load_context`. O método `predict` é responsável por fazer previsões usando o modelo, enquanto o método `load_context` é responsável por carregar o modelo e quaisquer dependências necessárias para a inferência. O método `MarvelModelWrapper.log_register_model()` é responsável por logar e registrar o modelo no MLflow, usando o flavor de `pyfunc` e incluindo o pacote `whl` como dependência do modelo.
+
+O método `load_context` invoca `mlflow.sklearn.load_model` passando como argumento `context.artifacts["lightgbm-pipeline"]`. Esses artefatos foram armazenados por meio de `MarvelModelWrapper.log_register_model()` na etapa `model_info = mlflow.pyfunc.log_model(..., artifacts={"lightgbm-pipeline": wraped_model_uri}, ...)`, etapa essa que no notebook é invocada antes de `mlflow.pyfunc.load_model()`.
+
+O modelo pode ser usado:
+    * Diretamente por `loaded_pufunc_model = mlflow.pyfunc.load_model(f"models:/{pyfunc_model_name}@latest-model")` ou;
+    * Desempacotando por meio de `unwraped_model = loaded_pufunc_model.unwrap_python_model()`
+
+A principal diferença é que usando `unwraped_model` é necessário passar o argumento `context` para o método `predict`, enquanto usando `loaded_pufunc_model` isso não é necessário.
+
+`Custom Model` inclui uma etapa de pós-processamento, permitindo que o output do modelo seja transformado em uma resposta mais amigável para os usuários finais. Por exemplo, substituindo o valor integer da classe prevista (0 ou 1) por uma string mais descritiva ("Alive" ou "Dead"). Essa etapa é implementada na classe `MarvelModelWrapper`.
+
+Apesar de tudo isso funcionar no ambiente local, só existe uma forma de garantir que o modelo irá funcionar corretamente em produção, usando o `Model Serving` do Databricks, que é por meio do snippet abaixo:
+```python
+    predictions = mlflow.models.predict(
+        model=f"models:/{pyfunc_model_name}@latest-model",
+        data=X_test[0:1]
+    )
+```
+
+No meu ambiente Databricks, eu adicionei o notebook `/Workspace/Users/ajosemf@gmail.com/marvel-characters/notebooks/lecture4.train_register_custom_model_CLONE` que experimenta o snippet acima. No databricks eu precisei criar na raiz do projeto `"dist/marvel_characters-0.1.0-py3-none-any.whl"`, uma vez que esse diretório não é versionado e é exigido durante a execução de `wrapper.log_register_model()`.
 
 # Anotações
 
@@ -128,7 +205,7 @@ dev = ["databricks-connect>=16.0, <17",
 
 ## Sincronizando VSCode com Databricks
 * Na extensão do Databricks no VS Code, em `Configuration > Remote Folder`, clicar no ícone de `sync` para sincronizar os arquivos do projeto com o Databricks. Isso irá criar uma pasta no Databricks com o nome do projeto, onde os arquivos do projeto serão sincronizados. O caminho da pasta no Databricks será algo como `/Workspace/User/[seu email]/.bundle/dev/marvel-characters/files`, onde `dev` é o target de desenvolvimento configurado no arquivo `databricks.yml`. Após a sincronização, os arquivos do projeto estarão disponíveis no Databricks e poderão ser acessados e executados a partir do Databricks.
-* A sincronização é especialmente importante quando há necessidade de executar notebooks a partir do Databricks, uma vez que algums comandos não poder ser executados a partir do VS Code, como por exemplo:
+* A sincronização é especialmente importante quando há necessidade de executar notebooks a partir do Databricks, uma vez que alguns comandos não podem ser executados a partir do VS Code, como por exemplo:
     * Comandos de delta tables, como `spark.sql("CREATE TABLE ...")`
     * Feature engineering packages
 
