@@ -60,9 +60,19 @@ loaded_pufunc_model = mlflow.pyfunc.load_model(f"models:/{pyfunc_model_name}@lat
 unwraped_model = loaded_pufunc_model.unwrap_python_model()
 
 # COMMAND ----------
+
 unwraped_model.predict(context=None, model_input=X_test[0:1])
+
 # COMMAND ----------
-# another predict function with uri
 
 loaded_pufunc_model.predict(X_test[0:1])
+
 # COMMAND ----------
+
+# THIS NOT WORKS ON LOCAL ENVIRONMENT
+# This is the only way that guarantees will work on Databricks Model Serving.
+
+# predictions = mlflow.models.predict(
+#     f"models:/{pyfunc_model_name}@latest-model",
+#     X_test[0:1]
+# )
