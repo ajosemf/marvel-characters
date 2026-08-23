@@ -22,12 +22,12 @@ O código fonte deste curso é um forked do repositório original, disponível e
 O repositório no meu GitHub é: https://github.com/ajosemf/marvel-characters
 
 ## Principais arquivos do repositório
-* `project_config_marvel.yml`: arquivo de configuração do projeto. Define
-    * Envs de produção, acceptance e desenvolvimento
+* `project_config_marvel.yml`: arquivo de configuração do projeto de ML. Define:
+    * Catálogos e Schemas de produção, acceptance e desenvolvimento
     * Parâmetros de treinamento do modelo
     * Features numéricas e categóricas
     * Target
-* `databricks.yml`: arquivo de configuração do Databricks Asset Bundles. Define os workspaces, root paths e variáveis para os targets de desenvolvimento, acceptance e produção.
+* `databricks.yml`: arquivo de configuração do Databricks Asset Bundles. Define os workspaces, root paths e variáveis para os workspaces targets de desenvolvimento, acceptance e produção.
 * `pyproject.toml`: arquivo de configuração do projeto Python. Define as dependências do projeto, bem como as dependências opcionais conforme o target (dev, acc, prd), além da qualidade do código por meio da configuração da ferramenta `ruff` na seção `[tool.ruff]`.
 * `src/marvel_characters/config.py`: módulo de configuração do projeto. Define a classe `ProjectConfig`, que implementa o método `from_yaml` para carregar a configuração do projeto a partir do arquivo `project_config_marvel.yml`.
 
@@ -36,16 +36,16 @@ Databricks recently introduced Free Edition, which opened the door for us to cre
 
 In this course series, we walk through the tools, patterns, and best practices for building and deploying machine learning workflows on Databricks:
 
-Lecture 1: Introduction to MLOPs
-Lecture 2: Developing on Databricks
-Lecture 3: Getting started with MLflow
-Lecture 4: Log and register model with MLflow
-Lecture 5: Model serving architectures
-Lecture 6: Deploying model serving endpoint
-Lecture 7: Databricks Asset Bundles
-Lecture 8: CI/CD and deployment strategies
-Lecture 9: Intro to monitoring
-Lecture 10: Lakehouse monitoring
+* Lecture 1: Introduction to MLOPs
+* Lecture 2: Developing on Databricks
+* Lecture 3: Getting started with MLflow
+* Lecture 4: Log and register model with MLflow
+* Lecture 5: Model serving architectures
+* Lecture 6: Deploying model serving endpoint
+* Lecture 7: Databricks Asset Bundles
+* Lecture 8: CI/CD and deployment strategies
+* Lecture 9: Intro to monitoring
+* Lecture 10: Lakehouse monitoring
 
 # Setup do Projeto
 
@@ -144,7 +144,7 @@ Abordado no notebook `notebooks/lecture4.train_register_basic_model.py`.
 
 Um MLflow Model é um formato padrão para empacotar modelos de ML. O MLflow oferece flavors para diferentes frameworks de ML, como scikit-learn, TensorFlow, PyTorch, LightGBM, entre outros. Flavors garantem consistência para processos de save, load e inferência de modelos. Pyfuncs podem ser usadas, por meio da classe base PythonModel, para criar um modelo customizado, i.e., um modelo que não se encaixe em nenhum flavor pré-definido.
 
-Este notebook invoca a classe `BasicModel` implementada em `src/marvel_characters/models/basic_model. py`. Elementos relevantes desta classe:
+Este notebook invoca a classe `BasicModel` implementada em `src/marvel_characters/models/basic_model.py`. Elementos relevantes desta classe:
 * A classe não representa uma arquitetura de aprendizado, mas sim um objeto que encapsula as etapas: `load_data, prepare_features, set_pipeline, train, log_model e register_model` (usando MLflow).
 * Em `prepare_features`, existem implementações separadas para `fit_transform` e `transform`, que são métodos para transformar uma variável categórica. O método `fit_transform` é usado para ajustar o encoder e transformar as colunas categóricas para valores inteiros, normalmente usando o conjunto de treinamento. O método `transform` é usado para transformar os dados de teste usando o encoder ajustado no conjunto de treinamento. Além de evitar data leakage, o método `transform` aplica o valor `-1` para categorias que não foram vistas durante o ajuste do encoder, o que é uma prática comum para lidar com categorias desconhecidas em dados de produção. A classe transforma para `valores inteiros em vez do clássico one-hot encoding` porque o LightGBM lida melhor com variáveis categóricas codificadas como inteiros.
 * Apesar do modelo ser o LightGBM, o notebook encapsula esse modelo em um `Scikit-learn Pipeline`. Isso permite que o log do modelo no MLflow seja feito usando o `flavor de Scikit-learn`, o que é vantajoso para fins de compatibilidade e portabilidade do modelo.
@@ -163,22 +163,164 @@ Para tal, o notebook invoca a classe `MarvelModelWrapper`, que estende `mlflow.p
 O método `load_context` invoca `mlflow.sklearn.load_model` passando como argumento `context.artifacts["lightgbm-pipeline"]`. Esses artefatos foram armazenados por meio de `MarvelModelWrapper.log_register_model()` na etapa `model_info = mlflow.pyfunc.log_model(..., artifacts={"lightgbm-pipeline": wraped_model_uri}, ...)`, etapa essa que no notebook é invocada antes de `mlflow.pyfunc.load_model()`.
 
 O modelo pode ser usado:
-    * Diretamente por `loaded_pufunc_model = mlflow.pyfunc.load_model(f"models:/{pyfunc_model_name}@latest-model")` ou;
-    * Desempacotando por meio de `unwraped_model = loaded_pufunc_model.unwrap_python_model()`
+* Diretamente por `loaded_pufunc_model = mlflow.pyfunc.load_model(f"models:/{pyfunc_model_name}@latest-model")` ou;
+* Desempacotando por meio de `unwraped_model = loaded_pufunc_model.unwrap_python_model()`
 
 A principal diferença é que usando `unwraped_model` é necessário passar o argumento `context` para o método `predict`, enquanto usando `loaded_pufunc_model` isso não é necessário.
 
 `Custom Model` inclui uma etapa de pós-processamento, permitindo que o output do modelo seja transformado em uma resposta mais amigável para os usuários finais. Por exemplo, substituindo o valor integer da classe prevista (0 ou 1) por uma string mais descritiva ("Alive" ou "Dead"). Essa etapa é implementada na classe `MarvelModelWrapper`.
 
-Apesar de tudo isso funcionar no ambiente local, só existe uma forma de garantir que o modelo irá funcionar corretamente em produção, usando o `Model Serving` do Databricks, que é por meio do snippet abaixo:
+Apesar de tudo isso funcionar no ambiente local, só existe uma forma de garantir que o modelo irá funcionar corretamente em produção, usando o `Model Serving` do Databricks, que é por meio do snippet abaixo. O método `mlflow.models.predict`, por default, retorna o resultado para `stdout`. É possível passar o parâmetro `output_path`, conforme a documentação: `output_path: File to output results to as json. If not provided, output to stdout.`.
 ```python
-    predictions = mlflow.models.predict(
+    mlflow.models.predict(
         model=f"models:/{pyfunc_model_name}@latest-model",
         data=X_test[0:1]
     )
 ```
 
-No meu ambiente Databricks, eu adicionei o notebook `/Workspace/Users/ajosemf@gmail.com/marvel-characters/notebooks/lecture4.train_register_custom_model_CLONE` que experimenta o snippet acima. No databricks eu precisei criar na raiz do projeto `"dist/marvel_characters-0.1.0-py3-none-any.whl"`, uma vez que esse diretório não é versionado e é exigido durante a execução de `wrapper.log_register_model()`.
+No meu ambiente Databricks, eu adicionei o notebook `/Workspace/Users/ajosemf@gmail.com/marvel-characters/notebooks/lecture4.predict_with_model_serving` que experimenta o snippet acima. 
+
+Para poder executar o notebook `notebooks/lecture4.train_register_custom_model.py` no databricks eu precisei criar na raiz do projeto `"dist/marvel_characters-0.1.0-py3-none-any.whl"`, uma vez que esse diretório não é versionado e é exigido durante a execução de `wrapper.log_register_model()`.
+
+# Model Serving
+Em geral, existem dois tipos de arquiteturas de Model Serving: `Batch Serving` e `Real Time Serving`.
+
+## Batch Serving
+* As predições são pré-computadas e armazenadas em uma base de dados
+* O endpoint apenas lê as predições na base de dados
+* Caso de uso típico: sistemas de recomendação
+
+## Real Time Serving
+* Endpoint computa as predições no momento da requisição.
+* Tipicamente, parte das features são carregadas a partir da base de dados e parte do payload da requisição.
+* Caso de uso típico: detecção de fraude, sistemas de recomendação e precificação dinâmica.
+
+## Feature Serving
+* Job em 4 etapas: Preprocess Data > Retrain Model > Generate Predictions > Store Predictions
+    * Por exemplo, etapas 1 e 2 semanais e etapas 3 e 4 diárias.
+* `Feature Spec`: é tratado pelo databricks como um modelo e é servido por trás de um Feature Serving Endpoint. É uma combinação de feature lookups e feature functions que definem como retornar as features. Features podem ser lidas da base de dados ou transformadas/calculadas com python/sql.
+
+## Model Serving
+* Job em 3 etapas: Preprocess Data > Retrain Model > Register Model
+* O ML Endpoint é criado para servir o modelo registrado.
+* Nesse cenário, todas as features são enviadas no payload da requisição.
+
+## Model Serving com Feature Lookup
+* Job 1 executa Preprocess Data > Store Features
+* Job 2 executa Load Features > Retrain Model > Register Model
+* Jobs 1 e 2 podem ter frequências de execução diferentes
+* O ML Endpoint consulta Features e Modelo para processar inferência
+* Neste cenário, o model logging emprega o pacote Feature Engineering do Databricks
+
+## Serverless Endpoints
+
+Principais features
+* Facilita implantação de modelos registrados
+* Scaling automático, incluindo o opcional scale-to-zero
+* Monitoramento nativo
+* Suporta inferência Batch e Real Time
+
+Limitações
+* Não permite escolher runtime (pode ser um problema para as dependências)
+* Não permite controle sobre o tamanho do cluster
+
+Workload Size
+* Permite escolher o tamanho do workload (e.g. small:4 units, ... , large:16-64 units, ..., 3XL: 512 units)
+* Cada unit processa 1 única requisição por vez
+* Autoscaling é baseado no número de units requeridos (independente de subutilização, e.g. 5% CPU usado)
+* Número de units requeridos = queries por segundo (QPS) * tempo de processamento do modelo (MPT)
+    * QPS = 1000
+    * MPT = 0.02 s (20ms)
+    * Número de units requeridos = $1.000*0.02=20$
+* Logo, para um modelo com 0.02 MPT, o limite de requisições é $512/0.02=25.600$
+
+## Código
+Abordado nos notebooks
+* `notebooks/lecture6.deploy_model_serving_endpoint.py`
+* `notebooks/lecture6.ab_testing.py`
+
+Como ponto de partida para execução do notebook `lecture6.deploy_model_serving_endpoint.py`, é necessário definir no arquivo `.env` as duas variáveis abaixo.
+
+```bash
+DBR_TOKEN=<TOKEN HERE>
+DBR_HOST=dbc-2f81cc5c-dad1.cloud.databricks.com
+```
+
+O `HOST` pode ser obtido no arquivo `.databrickscfg` (ver seção [Setup Inicial no VSCode](#setup-inicial-no-vscode))
+
+Para obter o `TOKEN` é necessário acessar a plataforma Databricks. No canto superior direito clicar no `ícone de usuário > Settings`. Na página Settings, no painel lateral esquerdo, clicar em `Developer > Access Tokens`. Na página que se abre, clicar em `Generate New Token`. 
+
+Apesar da configuração acima, o notebook dessa aula emprega um token gerado em tempo de execução. A geração desse token ocorre na célula 4 do notebook. Me parece que a config local não tem efeito aqui.
+
+```python
+    os.environ["DBR_TOKEN"] = w.tokens.create(lifetime_seconds=1200).token_value
+```
+
+O notebook apresenta o módulo `src/marvel_characters/serving/model_serving.py` que implementa a classe `ModelServing`. Essa classe implementa o principal método `deploy_or_update_serving_endpoint` que é responsável em criar o ML Endpoint no databricks. Após a execução da célula 6 do notebook, já é possível visualizar o endpoint na plataforma databricks em `AI/ML > Serving`. O endpoint leva cerca de 10 min para ser provisionado e passar ao estado `Ready`.
+
+O notebook também apresenta a implementação da função `call_endpoint` que pode ser usada para inferência.
+
+```python
+def call_endpoint(record):
+    """
+    Calls the model serving endpoint with a given input record.
+    """
+    serving_endpoint = f"{os.environ['DBR_HOST']}/serving-endpoints/marvel-character-model-serving/invocations"    
+    print(f"Calling endpoint: {serving_endpoint}")
+    
+    response = requests.post(
+        serving_endpoint,
+        headers={"Authorization": f"Bearer {os.environ['DBR_TOKEN']}"},
+        json={"dataframe_records": record},
+    )
+    return response.status_code, response.text
+
+dataframe_record = [
+    {'Height': 1.75,
+    'Weight': 70.0,
+    'Universe': 'Earth-616',
+    'Identity': 'Public',
+    'Gender': 'Male',
+    'Marital_Status': 'Single',
+    'Teams': 'Avengers',
+    'Origin': 'Human',
+    'Magic': 1,
+    'Mutant': 1
+    }
+]
+
+status_code, response_text = call_endpoint(dataframe_records[0])
+```
+
+## Inference Tables
+Por meio da plataforma, em `AI/ML > Serving > marvel-character-model-serving > Edit AI Gateway` é possível habilitar a opção `Enable inference tables and telemetry`. O recurso permite configurar uma tabela alvo no catálogo e uma taxa de amostragem que pode ser inclusive de 100% (i.e. todos as requisições). `No entanto, esse recurso não está disponível para a versão Free Edition`.
+
+## Traffic Split
+Em `AI/ML > Serving > marvel-character-model-serving` é possível observar que o endpoint está associado à 1 `Entity` com `Traffic == 100%`. De acordo com a vídeo aula, é possível dividir o tráfego das requisições para mais de um `Entity`, balanceado o tráfego conforme a necessidade. Isso pode ser usado tanto para dividir a carga, quanto para teste A/B. No entanto, não é recomendado usá-lo para teste A/B uma vez que o split é randômico.
+
+## A/B Testing
+O notebook `notebooks/lecture6.ab_testing.py` aborda a implementação de teste A/B de forma determinística como alternativa ao recurso Traffic Split que não garante determinismo.
+
+O notebook emprega a classe `BasicModel` para treinar e registrar dois modelos, A e B. Em seguida o notebook implementa a classe `MarvelModelWrapper(mlflow.pyfunc.PythonModel)` que serve como wrapper para encapsular os modelos A e B e implementa no método `predict` a lógica para rotear entre os modelos em função do `Id` do registro.
+
+Usando `mlflow.pyfunc.log_model` uma instância de `MarvelModelWrapper` é registrada com os modelos A e B encapsulados, sendo registrada com o nome `pyfunc-marvel-character-model-ab`. 
+
+```python
+mlflow.pyfunc.log_model(
+    python_model=wrapped_model,
+    artifact_path="pyfunc-marvel-character-model-ab",
+    artifacts={
+        "sklearn-pipeline-model-A": model_A_uri,
+        "sklearn-pipeline-model-B": model_B_uri},
+    signature=signature
+)
+```
+
+Em seguida é registrado o endpoint para `pyfunc-marvel-character-model-ab` que pode ser invocado conforme apresentado no notebook anterior.
+
+## Simulando Inference Tables
+Nas duas células finais do notebook `lecture6.deploy_model_serving_endpoint.py` eu implementei o código para simular a criação e log aos moldes do que inference tables faz. A tabela foi criada em `mlops_dev.marvel_characters.simulated_inference_table`. O schema dessa tabela é bem mais simples do que a criada pelo databricks de acordo com a documentação em [Inference Tables > Schema](https://docs.databricks.com/aws/en/ai-gateway/inference-tables#inference-table-schema).
+
 
 # Anotações
 
