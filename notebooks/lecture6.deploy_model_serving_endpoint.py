@@ -115,9 +115,91 @@ print(f"Response Text: {response_text}")
 
 # COMMAND ----------
 # Load test
+# for i in range(len(dataframe_records)):
+#     status_code, response_text = call_endpoint(dataframe_records[i])
+#     print(f"Response Status: {status_code}")
+#     print(f"Response Text: {response_text}")
+#     time.sleep(0.2) 
+# COMMAND ----------
+# Load test
+from datetime import datetime
+from pyspark.sql import functions as F
+
+
+responses = []
+
 for i in range(len(dataframe_records)):
+    record = dataframe_records[i]
+    request_timestamp = datetime.utcnow()
     status_code, response_text = call_endpoint(dataframe_records[i])
     print(f"Response Status: {status_code}")
     print(f"Response Text: {response_text}")
-    time.sleep(0.2) 
+    responses.append({
+        "record_id": i,
+        "status_code": status_code,
+        "response_text": response_text,
+        "inference_timestamp": request_timestamp
+    })
+    time.sleep(0.2)
+
+# COMMAND ----------
+import json
+import pandas as pd
+
+# 1. Achatar e preparar a lista de inputs
+# Como cada item em dataframe_records é uma lista de 1 elemento [[{...}], [{...}]], extraímos a posição [0]
+flat_inputs = [record[0] for record in dataframe_records]
+
+# 2. Processar a lista de respostas para extrair a predição limpa
+processed_responses = []
+for resp in responses:
+    # Copia o dicionário original da resposta
+    resp_data = resp.copy()
+    
+    # Extrai o valor da predição a partir da string JSON do 'response_text'
+    try:
+        parsed_json = json.loads(resp['response_text'])
+        # Pega a primeira predição (ex: "alive")
+        prediction = parsed_json['predictions']['Survival prediction'][0]
+    except Exception:
+        prediction = None
+        
+    resp_data['prediction'] = prediction
+    processed_responses.append(resp_data)
+
+# 3. Converter para DataFrames do Pandas adicionando a chave de junção (record_id)
+df_inputs_pd = pd.DataFrame(flat_inputs)
+df_inputs_pd['record_id'] = df_inputs_pd.index
+
+df_responses_pd = pd.DataFrame(processed_responses)
+
+# 4. Fazer o JOIN entre Input e Output pelo record_id
+df_inference_pd = pd.merge(df_inputs_pd, df_responses_pd, on='record_id', how='inner')
+
+# 5. Converter para PySpark DataFrame
+spark_df = spark.createDataFrame(df_inference_pd)
+
+# Opcional: Reordenar as colunas para ter um layout limpo de Inference Table
+columns_order = [
+    'record_id', 
+    'inference_timestamp', 
+    'status_code', 
+    'prediction', 
+    'response_text'
+] + [col for col in df_inputs_pd.columns if col != 'record_id']
+
+spark_df = spark_df.select(columns_order)
+# display(spark_df)
+
+# 6. Gravar na tabela do catálogo (Unity Catalog ou Hive Metastore)
+target_table = "mlops_dev.marvel_characters.simulated_inference_table"
+
+(spark_df.write
+    .format("delta")
+    .mode("append") # Use "overwrite" na primeira execução ou para redefinir a tabela
+    .option("mergeSchema", "true")
+    .saveAsTable(target_table)
+)
+
+print(f"Tabela de inferência atualizada com sucesso: {target_table}")
 # COMMAND ----------
