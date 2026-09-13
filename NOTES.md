@@ -322,6 +322,52 @@ Em seguida é registrado o endpoint para `pyfunc-marvel-character-model-ab` que 
 Nas duas células finais do notebook `lecture6.deploy_model_serving_endpoint.py` eu implementei o código para simular a criação e log aos moldes do que inference tables faz. A tabela foi criada em `mlops_dev.marvel_characters.simulated_inference_table`. O schema dessa tabela é bem mais simples do que a criada pelo databricks de acordo com a documentação em [Inference Tables > Schema](https://docs.databricks.com/aws/en/ai-gateway/inference-tables#inference-table-schema).
 
 
+# Databricks Asset Bundles
+Abordado nos arquivos em `scripts/*`.
+
+Databricks Asset Bundles (DAB) permite implantar o job com todas as suas dependências e configurações de forma declarativa por meio de arquivo yaml. Nos bastidores, DAB usa a stack Terraform. 
+
+O arquivo `databricks.yml`, na raiz do projeto, implementa o DAB.
+
+Seção `bundle`: configuração default que pode ser sobrescrita pelas seções target.
+- O recomendado é configurar o `cluster_id` nas seções `target`, uma vez que na seção `bundle` só funciona para o modo desenvolvimento.
+
+Seção `variables`: permite configurar variáveis que podem ser usadas em todo o bundle.
+
+Seção `permissions`: define permissões para grupos e usuários para todos os recursos do bundle. 
+- E.g., é possível configurar permissões como `CAN_VIEW`, `CAN_MANAGE`, `CAN_RUN`.
+
+Seção `artifacts`: configuração default de artefatos que pode ser sobrescrita pelas seções target. Define como os artefatos são empacotadas e implantados (packaged and deployed).
+
+Seção `include`: permite adicionar arquivos yaml adicionais. Organiza e modulariza a configuração para projetos muito grandes. Devido à modularização, também permite reutilização entre projetos.
+
+Seção `resources`: configurações padrão para `jobs` e `pipelines` que podem ser sobrescritas pelas seções target. Apesar de permitir outras subseções, e.g. `dashboards`, `experiments`, `models`, `schemas`, estas não são recomendadas por serem difíceis de garantir monitoramento e reprodutibilidade por meio de bundle.
+
+Seção `sync`: permite adicionar ou excluir paths e arquivos. Por default, tudo no diretório local do projeto é sincronizado, exceto as exceções configurados no arquivo `.gitignore`.
+
+Seção `targets`: define os environments para deploy, e.g. `dev`, `prd`. Tem precedência sobre todas as configurações nas demais seções.
+- Uma configuração chave nesta seção é `<TARGET> > mode: development`. Quando em modo development, os jobs agendados são pausados, evitando execução acidental durante os testes.
+
+Comandos CLI mais importantes:
+- `databricks bundle validate`
+- `databricks bundle deploy`
+- `databricks bundle run`
+- `databricks bundle destroy`
+
+
+## Bundle na prática
+
+Em Lecture 2, o módulo process_data.py sobrescreve os conjuntos de treino e teste. Em ambiente de produção, o que queremos é receber novos dados e fazer merge.
+
+Em Lecture 4, é realizado o treino e avaliação do modelo. Se o modelo treinado for melhor que o registrado, então o novo modelo é registrado como nova versão.
+
+Em Lecture 6, é apresentada a forma como criar o endpoint para a nova versão do modelo.
+
+A partir dos 10 min do vídeo (Lecture 7), explicação detalhada sobre a prática. 
+
+Em suma, define um job interessante em 4 etapas: `preprocessing > train/evaluate/register > check > deploy`. A etapa 2 passa a flag MODEL_UPDATE == 1 ou 0 para a etapa 3. Se 1, então a etapa 4 é executada. Esse job se utiliza dos scripts em `scripts` na seguinte ordem: `process_data.py > train_register_custom_model.py > deploy_model.py`.
+
+
 # Anotações
 
 ## Monitoramento de modelos
