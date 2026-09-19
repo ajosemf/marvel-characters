@@ -357,7 +357,7 @@ Comandos CLI mais importantes:
 
 ## Bundle na prática
 
-Em Lecture 2, o módulo process_data.py sobrescreve os conjuntos de treino e teste. Em ambiente de produção, o que queremos é receber novos dados e fazer merge.
+Em Lecture 2, o módulo `process_data.py` sobrescreve os conjuntos de treino e teste. Em ambiente de produção, o que queremos é receber novos dados e fazer merge.
 
 Em Lecture 4, é realizado o treino e avaliação do modelo. Se o modelo treinado for melhor que o registrado, então o novo modelo é registrado como nova versão.
 
@@ -366,6 +366,100 @@ Em Lecture 6, é apresentada a forma como criar o endpoint para a nova versão d
 A partir dos 10 min do vídeo (Lecture 7), explicação detalhada sobre a prática. 
 
 Em suma, define um job interessante em 4 etapas: `preprocessing > train/evaluate/register > check > deploy`. A etapa 2 passa a flag MODEL_UPDATE == 1 ou 0 para a etapa 3. Se 1, então a etapa 4 é executada. Esse job se utiliza dos scripts em `scripts` na seguinte ordem: `process_data.py > train_register_custom_model.py > deploy_model.py`.
+
+# CI/CD e Estratégias de Deploy
+Abordado nos arquivos `.github/workflows/*.yml` (Lecture 8)
+
+CI/CD tem por objetivo:
+* Automatizar Testes
+* Validar Pipelines
+* Deploy de Modelos
+
+## Workspace Setup, Access, Deploy Model
+Tipicamente, os ambientes são separados entre `DEV, HOMOLOG, PRD`. Essa separação pode ser configurada em nível de workspaces ou em nível de catálogos.
+
+Todos os workspaces devem ter acesso `READ` aos dados de produção. Todos os workspaces devem ter acesso `WRITE` ao seu catálogo (e.g. dev -> dev).
+
+Usuários só devem ter acesso direto ao ambiente `DEV`. Os demais ambientes só devem ser acessados via CD pipelines, garantindo segurança e rastreabilidade via service principals ou managed identities.
+
+`IMPORTANTE: ML Workflows só devem usar dados de catálogos OURO, que são dados considerados de alta qualidade`.
+
+`Workspace Securables`: notebooks, dashboards, clusters, jobs, endpoints.
+* Controlados via `Access Control Lists (ACLs)`
+* Usuários podem gerenciar seus próprios objetos
+* `Workspace Admins` podem gerenciar todos os objetos
+
+`Unit Catalog Securables`: catálogos, schemas, tabelas, modelos, outros assets.
+* Controlados via `Privileges` no nível de `Metastore`
+* `Metastore Admins` podem gerenciar metadados e permissões
+* Transferências de propriedade devem ser registradas em log.
+
+`Workspace Bindings`
+* Previnem acesso de dados entre projetos. Por exemplo, se um Engenheiro de Dados está envolvido em dois projetos, evita que o mesmo acesse o dataset errado.
+* `Modos de Acesso`: `OPEN` (securable visível por todos os workspaces) e `ISOLATED` (acesso restrito à workspaces específicos).
+
+Recomenda-se adotar políticas sobre clusters para assegurar a infraestrutura.
+
+Para que a automação CI/CD funcione, é necessário seguir os passos na conta Github:
+* Criar o ambiente de produção no Github
+    * _`Repo > Settings > Environments`_
+* Criar a conta Service Principal (SPN) no Databricks
+    * _`Workspace Settings > Identity and access`_
+* Criar secrets via SPN
+    * _`Workspace Settings > Identity and access > <Service principal> > Secrets > Generate secret`_
+* Adicionar o CLIENT_ID e CLIENT_SECRET no Github Environment
+    * _`Repo > Settings > Environments > Environment secrets`_
+* Definir a variável de ambiente DATABRICKS_HOST
+    * _`Repo > Settings > Environments > Environment variables`_
+    * No navegador, com o databricks aberto, copiar a URI `https://dbc-<...>.cloud.databricks.com/` 
+
+# Monitoring
+Abordado em Lecture 9 (Teoria), Lecture 10 (Prática) e notebook `notebooks/lecture10.marvel_create_monitoring_table.py`. 
+
+ML Systems precisam ser monitorados de forma a garantir que estão se comportando como esperado. Monitoring permite identificar questões como `Data Drift`, `Model Degradation` e `Falha de operação`.
+
+`Monitoramento Genérico`
+* System health
+* Errors
+* Latency
+
+`Monitoramento de ML`
+* Data Quality Checks
+* Data drift
+* Model drift
+
+`Custos e Valores de Negócio`
+* Custo de infraestrutura
+* Valor de Negócio
+* KPIs
+
+`Equidade (Fairness) e Bias (Viés)`
+* Para alguns sistemas como `Detecção de Fraude`, `Crédito`, outros
+
+## Data Drift & Model Drift
+Data Drift nem sempre causa Model Drift. É possível que o Data Drift seja apenas ruído ou talvez o modelo seja robusto o suficiente para lidar com o Data Drift. Antes de tomar qualquer ação, é importante checar ambos.
+
+## Databricks Lakehouse Monitoring
+O Databricks oferece produtos para monitoramento, criando automaticamente:
+* `Profile metrics tables`
+* `Drift metrics tables`
+* `Dashboard`
+
+É possível habilitar o produto para diferentes cenários: `inference, time series, snapshot`.
+
+## Inference Tables
+O Databricks oferece o recurso `Inference Tables` que registra os inputs e outputs para cada requisição ao modelo em uma delta table. O recurso pode ser habilitado por meio do endpoint.
+
+A `Inference Table` não é suficiente para a atividade de monitoramento. Para tal, cria-se uma `Monitoring Table` contendo:
+* Timestamp
+* Model Input
+* Model Output
+* Ground-Truth (por estar disponível somente dias, semanas ou meses após a predição pelo modelo)
+
+## Monitoring Setup e Schedule
+Tipicamente, dois pipelines separados:
+* `Pipeline 1`: Treinamento do modelo em função dos novos dados. Se o modelo treinado for melhor, substitui o anterior. O pipeline é executado conforme uma janela pré-definida (e.g. semanalmente).
+* `Pipeline 2`: Pré-processamento da Inference Table > Atualização da Monitoring Table -> Atualização do Dashboard. O pipeline é executado conforme uma janela pré-definida em função da disponibilidade dos dados Ground-Truth.
 
 
 # Anotações
